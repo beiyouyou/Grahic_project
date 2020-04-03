@@ -359,6 +359,58 @@ void displayFunc()
   glutSwapBuffers(); 
 }
 
+void displayTrack()
+{
+  glGenVertexArrays(1, &VAO);
+
+  setTextureUnit(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, trackTexHandle);
+
+  GLuint program = pipelineProgram->GetProgramHandle();
+  glBindVertexArray(VAO);
+  glBindBuffer(GL_ARRAY_BUFFER, buffer);
+  GLuint loc = glGetAttribLocation(program, "position");
+  glEnableVertexAttribArray(loc);
+  const void * offset = (const void*) 0;
+  glVertexAttribPointer(loc, 3, GL_FLOAT, GL_FALSE, 0, offset);
+
+  GLuint loc2 = glGetAttribLocation(program, "texCoord");
+  glEnableVertexAttribArray(loc2);
+  const void * offset2 = (const void*) (size_t)(pos.size()*sizeof(float));
+  glVertexAttribPointer(loc2, 2, GL_FLOAT, GL_FALSE, 0, offset2);
+  glBindVertexArray(0);
+
+  glBindVertexArray(VAO);
+  GLint first = 0;
+  GLsizei numberOfVertices = (pos.size()/3);
+  glDrawArrays(GL_TRIANGLES, first, numberOfVertices);
+  glBindVertexArray(0);
+
+  glGenVertexArrays(1, &crossBarVAO);
+  setTextureUnit(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, crossBarTexHandle);
+
+   program = pipelineProgram->GetProgramHandle();
+  glBindVertexArray(crossBarVAO);
+  glBindBuffer(GL_ARRAY_BUFFER, crossBarBuffer);
+  GLuint loc3 = glGetAttribLocation(program, "position");
+  glEnableVertexAttribArray(loc3);
+  const void * offset3 = (const void*) 0;
+  glVertexAttribPointer(loc3, 3, GL_FLOAT, GL_FALSE, 0, offset3);
+
+  GLuint loc4 = glGetAttribLocation(program, "texCoord");
+  glEnableVertexAttribArray(loc4);
+  const void * offset4 = (const void*) (size_t)(crossBarPos.size()*sizeof(float));
+  glVertexAttribPointer(loc4, 2, GL_FLOAT, GL_FALSE, 0, offset4);
+  glBindVertexArray(0);
+
+  glBindVertexArray(crossBarVAO);
+   first = 0;
+   numberOfVertices = (crossBarPos.size()/3);
+  glDrawArrays(GL_TRIANGLES, first, numberOfVertices);
+  glBindVertexArray(0);
+}
+
 void idleFunc()
 {
   // do some stuff... 
@@ -591,9 +643,12 @@ void initScene(int argc, char *argv[])
     color.push_back(0);
     color.push_back(1);
   }
-  binormal.x = 0.1 - splineCoord[0].x;
-  binormal.y = -1 - splineCoord[0].y;
-  binormal.z = -0.1 - splineCoord[0].z;
+  binormal.x = 0.00000000000001;
+  binormal.y = 1;
+  binormal.z = 0.00000000000001;
+  //binormal.x = 0.1 - splineCoord[0].x;
+  //binormal.y = -1 - splineCoord[0].y;
+  //binormal.z = -0.1 - splineCoord[0].z;
   glGenBuffers(1, &Buffer);
   glBindBuffer(GL_ARRAY_BUFFER, Buffer);
   glBufferData(GL_ARRAY_BUFFER, (pos.size() + color.size()) * sizeof(float),
