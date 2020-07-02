@@ -1,32 +1,25 @@
 #version 150
 
 in vec3 position;
-in vec3 left;
-in vec3 right;
-in vec3 up;
-in vec3 down;
+in vec3 normal;
+out vec3 viewPosition;
+out vec3 viewNormal;
+out vec3 viewLightDirection;
 
-in vec4 color;
-out vec4 col;
-
+uniform vec3 lightDirection;
+uniform mat4 viewMatrix;
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
-uniform bool mode = false; 
+uniform mat4 normalMatrix;
 
 void main()
 {
-  // compute the transformed and projected vertex position (into gl_Position) 
-  // compute the vertex color (into col)
-  //execute mode 4
-  if(mode){
-    vec3 newpos = (left + right + up + down)/4.0f;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(newpos, 1.0f);
-    col = newpos.z * max(color, vec4(0.00000004f)) / max(position.z, 0.00001f); 
-  }
-  else{
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0f);
-    col = color;
-  }
-
+// view-space position of the vertex
+  vec4 viewPosition4 = modelViewMatrix * vec4(position, 1.0f);
+  viewPosition = viewPosition4.xyz;
+// final position in the normalized device coordinates space
+gl_Position = projectionMatrix * viewPosition4;
+viewLightDirection = (viewMatrix*vec4(lightDirection, 0.0f)).xyz;
+viewNormal = normalize((normalMatrix*vec4(normal, 0.0f)).xyz);
 }
 

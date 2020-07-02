@@ -1,24 +1,28 @@
 ﻿/*
   CSCI 420 Computer Graphics, USC
-  Assignment 1: Height Fields with Shaders.
+  Assignment 2: Roller Coaster
   C++ starter code
 
-  Student username: beiyouzh
+  Student username: rhiremat
 */
 
-#include "basicPipelineProgram.h"
-#include "openGLMatrix.h"
-#include "imageIO.h"
-#include "openGLHeader.h"
-#include "glutHeader.h"
-#include <vector>
 #include <iostream>
 #include <cstring>
+#include "openGLHeader.h"
+#include "glutHeader.h"
+#include <glm/glm.hpp>
+#include <glm/gtx/transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "imageIO.h"
+#include "openGLMatrix.h"
+#include "texPipelineProgram.h"
+#include "basicPipelineProgram.h"
+#include <vector>
 
-#if defined(WIN32) || defined(_WIN32)
+#ifdef WIN32
   #ifdef _DEBUG
     #pragma comment(lib, "glew32d.lib")
   #else
@@ -26,7 +30,7 @@
   #endif
 #endif
 
-#if defined(WIN32) || defined(_WIN32)
+#ifdef WIN32
   char shaderBasePath[1024] = SHADER_BASE_PATH;
 #else
   char shaderBasePath[1024] = "../openGLHelper-starterCode";
@@ -34,121 +38,1047 @@
 
 using namespace std;
 
+// represents one control point along the spline
+struct Point
+{
+  double x;
+  double y;
+  double z;
+};
+// spline struct
+// contains how many control points the spline has, and an array of control points
+struct Spline
+{
+  int numControlPoints;
+  Point * points;
+};
+
 int mousePos[2]; // x,y coordinate of the mouse position
-int screenshot_index = 0;
-int leftMouseButton = 0; // 1 if pressed, 0 if not 
+int leftMouseButton = 0; // 1 if pressed, 0 if not
 int middleMouseButton = 0; // 1 if pressed, 0 if not
 int rightMouseButton = 0; // 1 if pressed, 0 if not
 
 typedef enum { ROTATE, TRANSLATE, SCALE } CONTROL_STATE;
-typedef enum {ONE, TWO, THREE, FOUR} DISPLAY_MODE;
-DISPLAY_MODE displayMode = ONE;
 CONTROL_STATE controlState = ROTATE;
 
 // state of the world
 float landRotate[3] = { 0.0f, 0.0f, 0.0f };
 float landTranslate[3] = { 0.0f, 0.0f, 0.0f };
 float landScale[3] = { 1.0f, 1.0f, 1.0f };
-int uindex = 0;
-int controlPoint = 0;
+
+float lightAmbient[4] = {0.25f,0.25f,0.25f,1.0f};
+float lightDiffuse[4] = {0.4f,0.4f,0.4f,1.0f};
+float lightSpecular[4] = {0.77f,0.77f,0.77f,1.0f};
+ 
+float meshAmbient[4] = {0.6f,0.6f,0.6f,1.0f};
+float meshDiffuse[4] = {0.4f,0.4f,0.4f,1.0f};
+float meshSpecular[4] = {0.5f,0.5f,0.5f,1.0f};
+float shininess = 0.6;
 int windowWidth = 1280;
 int windowHeight = 720;
-char windowTitle[512] = "CSCI 420 homework I";
+char windowTitle[512] = "CSCI 420 homework II";
+
+OpenGLMatrix * matrix;
+TexPipelineProgram * pipelineProgram;
+BasicPipelineProgram * basicPipelineProgram;
+GLuint buffer, skyBuffer, groundBuffer, crossBarBuffer;
+GLuint VAO, skyVAO, groundVAO, crossBarVAO;
+
+GLuint skyTexHandle;
+vector<float> skyPos;
+vector<float> skyUVs;
+
+GLuint groundTexHandle;
+vector<float> groundPos;
+vector<float> groundUVs;
+/*
+GLuint trackTexHandle;
+vector<float> pos;
+vector<float> uvs;*/
+
+GLuint crossBarTexHandle;
+vector<float> crossBarPos;
+vector<float> crossBarUVs;
+
+vector<float> trackpos;
+vector<float> tracknorm;
+
+float FOV = 54.0f;
 float eye[3] = {0, 0, 0};
-float lookat[3] = {0, 0, -1};
+float focus[3] = {0, 0, -1};
 float up[3] = {0, 1, 0};
-ImageIO * heightmapImage;
 
-//vbo and ebo
-GLuint Buffer;
-//vao
-GLuint pointVertexArray;
-int sizeTri;
-int sizeLine;
-int sizePoint;
-int fps = 60;
-int time_count = 0;
-float u = 0.0f;
-OpenGLMatrix matrix;
-BasicPipelineProgram * pipelineProgram;
-// represents one control point along the spline 
-struct Point 
-{
-  double x;
-  double y;
-  double z;
-};
-
-// spline struct 
-// contains how many control points the spline has, and an array of control points 
-struct Spline 
-{
-  int numControlPoints;
-  Point * points;
-};
-// the spline array 
+float u = 0;
+float step = 0.005;
+int uindex = 0;
+int controlPoint = 0;
+int splineNum = 0;
 Spline * splines;
+int numSplines;
+
+float s = 0.5;
+float M [4][4] = {{(-s),  (2-s),  (s-2),   (s)},
+                  {(2*s), (s-3),  (3-2*s),  (-s)},
+                  {(-s),  (0),    (s),    (0)},
+                  {(0),   (1),    (0),   (0)}};
+
+bool takeSS=true;
+int ssCount=0;
+//fps = 30
+int timer = 33;
+
+vector<Point> splineCoord;
+vector<Point> tangentCoord;
+
 Point tangent;
 Point normal;
 Point binormal;
-// total number of splines 
-int numSplines;
-int splineNum = 0;
-vector<Point> splineCoord;
-vector<Point> tangentCoord;
-int loadSplines(char * argv) 
+
+// write a screenshot to the specified filename
+void saveScreenshot(const char * filename)
 {
-  char * cName = (char *) malloc(128 * sizeof(char));
-  FILE * fileList;
-  FILE * fileSpline;
-  int iType, i = 0, j, iLength;
+  int scale = 2;
+  int ww = windowWidth * scale;
+  int hh = windowHeight * scale;
+  unsigned char * screenshotData = new unsigned char[ww * hh * 3];
+  glReadPixels(0, 0, ww, hh, GL_RGB, GL_UNSIGNED_BYTE, screenshotData);
 
-  // load the track file 
-  fileList = fopen(argv, "r");
-  if (fileList == NULL) 
-  {
-    printf ("can't open file %s\n", argv);
-    exit(1);
-  }
-
-  // stores the number of splines in a global variable 
-  fscanf(fileList, "%d", &numSplines);
-
-  splines = (Spline*) malloc(numSplines * sizeof(Spline));
-
-  // reads through the spline files 
-  for (j = 0; j < numSplines; j++) 
-  {
-    i = 0;
-    fscanf(fileList, "%s", cName);
-    fileSpline = fopen(cName, "r");
-
-    if (fileSpline == NULL) 
-    {
-      printf ("can't open file %s\n", cName);
-      exit(1);
-    }
-
-    // gets length for spline file
-    fscanf(fileSpline, "%d %d", &iLength, &iType);
-
-    // allocate memory for all the points
-    splines[j].points = (Point *)malloc(iLength * sizeof(Point));
-    splines[j].numControlPoints = iLength;
-
-    // saves the data to the struct
-    while (fscanf(fileSpline, "%lf %lf %lf", 
-	   &splines[j].points[i].x, 
-	   &splines[j].points[i].y, 
-	   &splines[j].points[i].z) != EOF) 
-    {
-      i++;
+  unsigned char * screenshotData1 = new unsigned char[windowWidth * windowHeight * 3];
+  for (int h = 0; h < windowHeight; h++) {
+    for (int w = 0; w < windowWidth; w++) {
+      int h1 = h * scale;
+      int w1 = w * scale;
+      screenshotData1[(h * windowWidth + w) * 3] = screenshotData[(h1 * ww + w1) * 3];
+      screenshotData1[(h * windowWidth + w) * 3 + 1] = screenshotData[(h1 * ww + w1) * 3 + 1];
+      screenshotData1[(h * windowWidth + w) * 3 + 2] = screenshotData[(h1 * ww + w1) * 3 + 2];
     }
   }
 
-  free(cName);
+  ImageIO screenshotImg(windowWidth, windowHeight, 3, screenshotData1);
 
-  return 0;
+  if (screenshotImg.save(filename, ImageIO::FORMAT_JPEG) == ImageIO::OK)
+    cout << "File " << filename << " saved successfully." << endl;
+  else cout << "Failed to save file " << filename << '.' << endl;
+
+  delete [] screenshotData;
+}
+// returns a unit vector in the direction of the vector passed as a parameter
+void normalize(Point &v)
+{
+    double mag = sqrt(pow(v.x,2) + pow(v.y,2) + pow(v.z,2));
+    if (mag>=0)
+    {
+      v.x = v.x / mag;
+      v.y = v.y / mag;
+      v.z = v.z / mag;
+    }
+    else
+    {
+      v.x = 0;
+      v.y = 0;
+      v.z = 0;
+    }
+}
+
+// returns the corss product of the vectores passed as parameters
+void computeCrossProduct(Point a, Point b, Point &c)
+{
+  c.x = a.y*b.z - b.y*a.z;
+  c.y = a.z*b.x - b.z*a.x;
+  c.z = a.x*b.y - b.x*a.y;
+}
+Point computeNormalGivenPoint(Point a, Point b, Point c){
+  Point result;
+  Point arg1;
+  Point arg2;
+  arg1.x = b.x - a.x;
+  arg1.y = b.y - a.y;
+  arg1.z = b.z - a.z;
+
+  arg2.x = c.x - a.x;
+  arg2.y = c.y - a.y;
+  arg2.z = c.z - a.z;
+  computeCrossProduct(arg1, arg2, result);
+  normalize(result);
+  return result;
+}
+
+// computes the normal and binormal given the tangent at a point
+void computeNormal(Point tangent, Point &normal, Point &binormal)
+{
+  computeCrossProduct(binormal, tangent, normal);
+  normalize(normal);
+
+  computeCrossProduct(tangent, normal, binormal);
+  normalize(binormal);
+}
+
+void addTriangle(Point a, Point normala, Point b, Point normalb, Point c, Point normalc)
+{
+  //cout << normala.x << " "<< normala.y <<" "<<normala.z<<endl;
+  trackpos.push_back(a.x);
+  trackpos.push_back(a.y);
+  trackpos.push_back(a.z);
+
+  trackpos.push_back(b.x);
+  trackpos.push_back(b.y);
+  trackpos.push_back(b.z);
+
+  trackpos.push_back(c.x);
+  trackpos.push_back(c.y);
+  trackpos.push_back(c.z);
+
+  tracknorm.push_back(normala.x);
+  tracknorm.push_back(normala.y);
+  tracknorm.push_back(normala.z);
+
+  tracknorm.push_back(normalb.x);
+  tracknorm.push_back(normalb.y);
+  tracknorm.push_back(normalb.z);
+
+  tracknorm.push_back(normalb.x);
+  tracknorm.push_back(normalb.y);
+  tracknorm.push_back(normalb.z);
+}
+
+void setTextureUnit(GLint unit)
+{
+  GLuint program = pipelineProgram->GetProgramHandle();
+  glActiveTexture(unit); // select the active texture unit
+  // get a handle to the “textureImage” shader variable
+  GLint h_textureImage = glGetUniformLocation(program, "textureImage");
+  // deem the shader variable “textureImage” to read from texture unit “unit”
+  glUniform1i(h_textureImage, unit - GL_TEXTURE0);
+}
+
+// initializes the buffer with coordinates for the sky texture
+void initSky()
+{
+  //back face
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  //front face
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  //right face
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  //left face???
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  //top face
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyPos.push_back(100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  //bot
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(0);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyPos.push_back(-100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(1);
+
+  skyPos.push_back(100);
+  skyPos.push_back(-100);
+  skyPos.push_back(100);
+  skyUVs.push_back(1);
+  skyUVs.push_back(0);
+
+}
+
+// initializes the buffer with coordinates for the ground texture
+void initGround()
+{
+  groundPos.push_back(-100);
+  groundPos.push_back(-100);
+  groundPos.push_back(100);
+  groundUVs.push_back(0);
+  groundUVs.push_back(0);
+
+  groundPos.push_back(-100);
+  groundPos.push_back(100);
+  groundPos.push_back(100);
+  groundUVs.push_back(0);
+  groundUVs.push_back(1);
+
+  groundPos.push_back(100);
+  groundPos.push_back(-100);
+  groundPos.push_back(100);
+  groundUVs.push_back(1);
+  groundUVs.push_back(0);
+
+  groundPos.push_back(-100);
+  groundPos.push_back(100);
+  groundPos.push_back(100);
+  groundUVs.push_back(0);
+  groundUVs.push_back(1);
+
+  groundPos.push_back(100);
+  groundPos.push_back(100);
+  groundPos.push_back(100);
+  groundUVs.push_back(1);
+  groundUVs.push_back(1);
+
+  groundPos.push_back(100);
+  groundPos.push_back(-100);
+  groundPos.push_back(100);
+  groundUVs.push_back(1);
+  groundUVs.push_back(0);
+}
+
+// initializes the buffer with coordinates for the spline, tracks and crossbars
+void initSplineCoordinates()
+{
+  float u1 = 0;
+  double basis_func_spline[4];
+  double basis_func_tangent[4];
+  Point coord, tangent;
+  Point prevCoord, prevTangent;
+  float C[4][3];
+
+  //calculate the point on the spline and the tangent
+  for (int j = 0; j < numSplines; j++)
+  {
+    for (int i=0;i<splines[j].numControlPoints-3;i++)
+    {
+      for (int k=0;k<4;k++)
+      {
+        C[k][0] = splines[j].points[i+k].x;
+        C[k][1] = splines[j].points[i+k].y;
+        C[k][2] = splines[j].points[i+k].z;
+      }
+      for(u1=0;u1<=1;u1+=step)
+      {
+        for (int l=0; l<4;l++)
+        {
+          basis_func_spline[l] = (pow(u1,3) * M[0][l]) + (pow(u1,2) * M[1][l]) + (pow(u1,1) * M[2][l]) + (M[3][l]);
+          basis_func_tangent[l] = (3 * pow(u1,2) * M[0][l]) + (2 * u1 * M[1][l]) + M[2][l]; //derivative of p(u)
+        }
+
+        coord.x = 0.0;
+        coord.y = 0.0;
+        coord.z = 0.0;
+        tangent.x = 0.0;
+        tangent.y = 0.0;
+        tangent.z = 0.0;
+
+        for (int m=0;m<4;m++)
+        {
+          coord.x += basis_func_spline[m]*C[m][0];
+          coord.y += basis_func_spline[m]*C[m][1];
+          coord.z += basis_func_spline[m]*C[m][2];
+
+          tangent.x += basis_func_tangent[m]*C[m][0];
+          tangent.y += basis_func_tangent[m]*C[m][1];
+          tangent.z += basis_func_tangent[m]*C[m][2];
+        }
+        //cout<<"coor is" << coord.x <<" " << coord.y <<" " << coord.z << endl;
+        splineCoord.push_back(coord);
+        normalize(tangent);
+        tangentCoord.push_back(tangent);
+      }
+    }
+  }
+
+  for(int i = 0; i < tracknorm.size(); i++){
+    cout<< tracknorm[i] <<" ";
+  }
+
+  //calculate the coordinates for the rails
+  Point v0,v1,v2,v3,v4,v5,v6,v7,v;
+  Point n0,n1,b0,b1;
+  float alpha = 0.002; //ratio of the normal
+  float alpha2 = 0.02; //ratio of the binormal
+  float beta = 0.01;
+  int cb=0;
+
+  v.x = 0.00000000000001;
+  v.y = 1;
+  v.z = 0.00000000000001;
+
+  computeCrossProduct(tangentCoord[0], v, n0);
+  normalize(n0);
+
+  computeCrossProduct(tangentCoord[0], n0, b0);
+  normalize(b0);
+
+  Point V0,V1,V2,V3,V4,V5,V6,V7;
+  Point cb0,cb1,cb2,cb3;
+
+  for (int i=1; i<splineCoord.size(); i+=10)
+  {
+    if (i!=0)
+    {
+      computeNormal(tangentCoord[i], n0, b0);
+    }
+
+    v0.x = splineCoord[i].x + alpha * (-n0.x) + alpha2* (b0.x);
+    v0.y = splineCoord[i].y + alpha * (-n0.y) + alpha2* (b0.y);
+    v0.z = splineCoord[i].z + alpha * (-n0.z) + alpha2* (b0.z);
+
+    v1.x = splineCoord[i].x + alpha * (n0.x) + alpha2* (b0.x);
+    v1.y = splineCoord[i].y + alpha * (n0.y) + alpha2* (b0.y);
+    v1.z = splineCoord[i].z + alpha * (n0.z) + alpha2* (b0.z);
+
+    v2.x = splineCoord[i].x + alpha * (n0.x) - alpha2* (b0.x);
+    v2.y = splineCoord[i].y + alpha * (n0.y) - alpha2* (b0.y);
+    v2.z = splineCoord[i].z + alpha * (n0.z) - alpha2* (b0.z);
+
+    v3.x = splineCoord[i].x + alpha * (-n0.x) - alpha2* (b0.x);
+    v3.y = splineCoord[i].y + alpha * (-n0.y) - alpha2* (b0.y);
+    v3.z = splineCoord[i].z + alpha * (-n0.z) - alpha2* (b0.z);
+
+    b1 = b0;
+    computeNormal(tangentCoord[i+10], n1, b1);
+
+    v4.x = splineCoord[i+10].x + alpha * (-n1.x) + alpha2* (b1.x);
+    v4.y = splineCoord[i+10].y + alpha * (-n1.y) + alpha2* (b1.y);
+    v4.z = splineCoord[i+10].z + alpha * (-n1.z) + alpha2* (b1.z);
+
+    v5.x = splineCoord[i+10].x + alpha * (n1.x) + alpha2* (b1.x);
+    v5.y = splineCoord[i+10].y + alpha * (n1.y) + alpha2* (b1.y);
+    v5.z = splineCoord[i+10].z + alpha * (n1.z) + alpha2* (b1.z);
+
+    v6.x = splineCoord[i+10].x + alpha * (n1.x) - alpha2* (b1.x);
+    v6.y = splineCoord[i+10].y + alpha * (n1.y) - alpha2* (b1.y);
+    v6.z = splineCoord[i+10].z + alpha * (n1.z) - alpha2* (b1.z);
+
+    v7.x = splineCoord[i+10].x + alpha * (-n1.x) - alpha2* (b1.x);
+    v7.y = splineCoord[i+10].y + alpha * (-n1.y) - alpha2* (b1.y);
+    v7.z = splineCoord[i+10].z + alpha * (-n1.z) - alpha2* (b1.z);
+
+    //left rail
+    V0.x = v3.x;
+    V0.y = v3.y;
+    V0.z = v3.z;
+
+    V1.x = v2.x;
+    V1.y = v2.y;
+    V1.z = v2.z;
+
+    V2.x = v2.x - beta*b0.x;
+    V2.y = v2.y - beta*b0.y;
+    V2.z = v2.z - beta*b0.z;
+
+    V3.x = v3.x - beta*b0.x;
+    V3.y = v3.y - beta*b0.y;
+    V3.z = v3.z - beta*b0.z;
+
+    V4.x = v7.x;
+    V4.y = v7.y;
+    V4.z = v7.z;
+
+    V5.x = v6.x;
+    V5.y = v6.y;
+    V5.z = v6.z;
+
+    V6.x = v6.x - beta*b1.x;
+    V6.y = v6.y - beta*b1.y;
+    V6.z = v6.z - beta*b1.z;
+
+    V7.x = v7.x - beta*b1.x;
+    V7.y = v7.y - beta*b1.y;
+    V7.z = v7.z - beta*b1.z;
+    Point nRight = computeNormalGivenPoint(V1, V0, V5);
+    Point nTop = computeNormalGivenPoint(V2, V1, V6);
+    Point nLeft = computeNormalGivenPoint(V2, V6, V3);
+    Point nBot = computeNormalGivenPoint(V3, V7, V0);
+    //top
+    addTriangle(V6, nTop, V2, nTop, V1, nTop);
+    addTriangle(V6, nTop, V5, nTop, V1, nTop);
+    //right
+    addTriangle(V5, nRight, V1, nRight, V0, nRight);
+    addTriangle(V5, nRight, V4, nRight, V0, nRight);
+    //bottom
+    addTriangle(V7, nBot, V3,nBot, V0, nBot);
+    addTriangle(V7, nBot, V4, nBot, V0, nBot);
+    //left
+    addTriangle(V6, nLeft, V2, nLeft, V3, nLeft);
+    addTriangle(V6, nLeft, V7, nLeft, V3, nLeft);
+
+    //right rail
+    V0.x = v0.x + beta*b0.x;
+    V0.y = v0.y + beta*b0.y;
+    V0.z = v0.z + beta*b0.z;
+
+    V1.x = v1.x + beta*b0.x;
+    V1.y = v1.y + beta*b0.y;
+    V1.z = v1.z + beta*b0.z;
+
+    V2.x = v1.x;
+    V2.y = v1.y;
+    V2.z = v1.z;
+
+    V3.x = v0.x;
+    V3.y = v0.y;
+    V3.z = v0.z;
+
+    V4.x = v4.x + beta*b1.x;
+    V4.y = v4.y + beta*b1.y;
+    V4.z = v4.z + beta*b1.z;
+
+    V5.x = v5.x + beta*b1.x;
+    V5.y = v5.y + beta*b1.y;
+    V5.z = v5.z + beta*b1.z;
+
+    V6.x = v5.x;
+    V6.y = v5.y;
+    V6.z = v5.z;
+
+    V7.x = v4.x;
+    V7.y = v4.y;
+    V7.z = v4.z;
+
+    nRight = computeNormalGivenPoint(V1, V0, V5);
+    nTop = computeNormalGivenPoint(V2, V1, V6);
+    nLeft = computeNormalGivenPoint(V2, V6, V3);
+    nBot = computeNormalGivenPoint(V3, V7, V0);
+    //top
+    addTriangle(V6, nTop, V2, nTop, V1, nTop);
+    addTriangle(V6, nTop, V5, nTop, V1, nTop);
+    //right
+    addTriangle(V5, nRight, V1, nRight, V0, nRight);
+    addTriangle(V5, nRight, V4, nRight, V0, nRight);
+    //bottom
+    addTriangle(V7, nBot, V3,nBot, V0, nBot);
+    addTriangle(V7, nBot, V4, nBot, V0, nBot);
+    //left
+    addTriangle(V6, nLeft, V2, nLeft, V3, nLeft);
+    addTriangle(V6, nLeft, V7, nLeft, V3, nLeft);
+    //coordinates of the cross bars
+    cb0 = v0;
+    cb3 = v3;
+
+    cb1.x = v0.x + 0.01*tangentCoord[i].x;
+    cb1.y = v0.y + 0.01*tangentCoord[i].y;
+    cb1.z = v0.z + 0.01*tangentCoord[i].z;
+
+    cb2.x = v3.x + 0.01*tangentCoord[i].x;
+    cb2.y = v3.y + 0.01*tangentCoord[i].y;
+    cb2.z = v3.z + 0.01*tangentCoord[i].z;
+
+    crossBarPos.push_back(cb2.x);
+    crossBarPos.push_back(cb2.y);
+    crossBarPos.push_back(cb2.z);
+
+    crossBarUVs.push_back(0);
+    crossBarUVs.push_back(1);
+
+    crossBarPos.push_back(cb1.x);
+    crossBarPos.push_back(cb1.y);
+    crossBarPos.push_back(cb1.z);
+
+    crossBarUVs.push_back(1);
+    crossBarUVs.push_back(1);
+
+    crossBarPos.push_back(cb0.x);
+    crossBarPos.push_back(cb0.y);
+    crossBarPos.push_back(cb0.z);
+
+    crossBarUVs.push_back(1);
+    crossBarUVs.push_back(0);
+
+    crossBarPos.push_back(cb2.x);
+    crossBarPos.push_back(cb2.y);
+    crossBarPos.push_back(cb2.z);
+
+    crossBarUVs.push_back(0);
+    crossBarUVs.push_back(1);
+
+    crossBarPos.push_back(cb3.x);
+    crossBarPos.push_back(cb3.y);
+    crossBarPos.push_back(cb3.z);
+
+    crossBarUVs.push_back(0);
+    crossBarUVs.push_back(0);
+
+    crossBarPos.push_back(cb0.x);
+    crossBarPos.push_back(cb0.y);
+    crossBarPos.push_back(cb0.z);
+
+    crossBarUVs.push_back(1);
+    crossBarUVs.push_back(0);
+
+    b0 = b1;
+
+  }
+}
+
+void initBuffer()
+{
+  initGround();
+  initSky();
+  initSplineCoordinates();
+}
+
+void initVBOs()
+{
+  glGenBuffers(1, &buffer);
+  glBindBuffer(GL_ARRAY_BUFFER, buffer);
+  glBufferData(GL_ARRAY_BUFFER, (trackpos.size() + tracknorm.size()) * sizeof(float), NULL, GL_STATIC_DRAW);
+  // upload position data
+  glBufferSubData(GL_ARRAY_BUFFER, 0, trackpos.size() * sizeof(float), trackpos.data());
+  // upload normal data
+  glBufferSubData(GL_ARRAY_BUFFER, trackpos.size() * sizeof(float), tracknorm.size() * sizeof(float), tracknorm.data());
+
+  glGenBuffers(1, &groundBuffer);
+  glBindBuffer(GL_ARRAY_BUFFER, groundBuffer);
+  glBufferData(GL_ARRAY_BUFFER, (groundPos.size() + groundUVs.size()) * sizeof(float), NULL, GL_STATIC_DRAW);
+  // upload position data
+  glBufferSubData(GL_ARRAY_BUFFER, 0, groundPos.size() * sizeof(float), groundPos.data());
+  // upload uv data
+  glBufferSubData(GL_ARRAY_BUFFER, groundPos.size() * sizeof(float), groundUVs.size() * sizeof(float), groundUVs.data());
+
+  glGenBuffers(1, &skyBuffer);
+  glBindBuffer(GL_ARRAY_BUFFER, skyBuffer);
+  glBufferData(GL_ARRAY_BUFFER, (skyPos.size() + skyUVs.size()) * sizeof(float), NULL, GL_STATIC_DRAW);
+  // upload position data
+  glBufferSubData(GL_ARRAY_BUFFER, 0, skyPos.size() * sizeof(float), skyPos.data());
+  // upload uv data
+  glBufferSubData(GL_ARRAY_BUFFER, skyPos.size() * sizeof(float), skyUVs.size() * sizeof(float), skyUVs.data());
+
+  glGenBuffers(1, &crossBarBuffer);
+  glBindBuffer(GL_ARRAY_BUFFER, crossBarBuffer);
+  glBufferData(GL_ARRAY_BUFFER, (crossBarPos.size() + crossBarUVs.size()) * sizeof(float), NULL, GL_STATIC_DRAW);
+  // upload position data
+  glBufferSubData(GL_ARRAY_BUFFER, 0, crossBarPos.size() * sizeof(float), crossBarPos.data());
+  // upload uv data
+  glBufferSubData(GL_ARRAY_BUFFER, crossBarPos.size() * sizeof(float), crossBarUVs.size() * sizeof(float), crossBarUVs.data());
+
+}
+
+// sets the camera attributes eye, focus and up
+void setCameraAttributes(int i)
+{
+  computeNormal(tangentCoord[i], normal, binormal);
+
+  eye[0] = splineCoord[i].x + 0.03 * normal.x;
+  eye[1] = splineCoord[i].y + 0.03 * normal.y;
+  eye[2] = splineCoord[i].z + 0.03 * normal.z;
+
+  focus[0] = splineCoord[i+1].x + 0.03 * normal.x;
+  focus[1] = splineCoord[i+1].y + 0.03 * normal.y;
+  focus[2] = splineCoord[i+1].z + 0.03 * normal.z;
+
+  up[0] = normal.x;
+  up[1] = normal.y;
+  up[2] = normal.z;
+}
+
+// displays the ground
+void displayGround()
+{
+  glGenVertexArrays(1, &groundVAO);
+
+  setTextureUnit(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, groundTexHandle);
+
+  GLuint program = pipelineProgram->GetProgramHandle();
+  glBindVertexArray(groundVAO);
+  glBindBuffer(GL_ARRAY_BUFFER, groundBuffer);
+  GLuint loc = glGetAttribLocation(program, "position");
+  glEnableVertexAttribArray(loc);
+  const void * offset = (const void*) 0;
+  glVertexAttribPointer(loc, 3, GL_FLOAT, GL_FALSE, 0, offset);
+
+  GLuint loc2 = glGetAttribLocation(program, "texCoord");
+  glEnableVertexAttribArray(loc2);
+  const void * offset2 = (const void*) (size_t)(groundPos.size()*sizeof(float));
+  glVertexAttribPointer(loc2, 2, GL_FLOAT, GL_FALSE, 0, offset2);
+  glBindVertexArray(0);
+
+  glBindVertexArray(groundVAO);
+  GLint first = 0;
+  GLsizei numberOfVertices = (groundPos.size()/3);
+  glDrawArrays(GL_TRIANGLES, first, numberOfVertices);
+
+  glBindVertexArray(0);
+}
+
+// displays the sky
+void displaySky()
+{
+  glGenVertexArrays(1, &skyVAO);
+
+  setTextureUnit(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, skyTexHandle);
+
+  GLuint program = pipelineProgram->GetProgramHandle();
+  glBindVertexArray(skyVAO);
+  glBindBuffer(GL_ARRAY_BUFFER, skyBuffer);
+  GLuint loc = glGetAttribLocation(program, "position");
+  glEnableVertexAttribArray(loc);
+  const void * offset = (const void*) 0;
+  glVertexAttribPointer(loc, 3, GL_FLOAT, GL_FALSE, 0, offset);
+
+  GLuint loc2 = glGetAttribLocation(program, "texCoord");
+  glEnableVertexAttribArray(loc2);
+  const void * offset2 = (const void*) (size_t)(skyPos.size()*sizeof(float));
+  glVertexAttribPointer(loc2, 2, GL_FLOAT, GL_FALSE, 0, offset2);
+  glBindVertexArray(0);
+
+  glBindVertexArray(skyVAO);
+  GLint first = 0;
+  GLsizei numberOfVertices = (skyPos.size()/3);
+  glDrawArrays(GL_TRIANGLES, first, numberOfVertices);
+
+  glBindVertexArray(0);
+}
+
+// displays the track and crossbars
+void displayTrack()
+{
+  glGenVertexArrays(1, &VAO);
+  GLuint program = basicPipelineProgram->GetProgramHandle();
+  glBindVertexArray(VAO);
+  glBindBuffer(GL_ARRAY_BUFFER, buffer);
+  GLuint loc = glGetAttribLocation(program, "position");
+  glEnableVertexAttribArray(loc);
+  const void * offset = (const void*) 0;
+  glVertexAttribPointer(loc, 3, GL_FLOAT, GL_FALSE, 0, offset);
+
+  GLuint loc2 = glGetAttribLocation(program, "normal");
+  glEnableVertexAttribArray(loc2);
+  const void * offset2 = (const void*) (size_t)(trackpos.size()*sizeof(float));
+  glVertexAttribPointer(loc2, 3, GL_FLOAT, GL_FALSE, 0, offset2);
+  glBindVertexArray(0);
+
+  glBindVertexArray(VAO);
+  GLint first = 0;
+  GLsizei numberOfVertices = (trackpos.size()/3);
+  basicPipelineProgram->Bind();
+  glDrawArrays(GL_TRIANGLES, first, numberOfVertices);
+  glBindVertexArray(0);
+
+  glGenVertexArrays(1, &crossBarVAO);
+  setTextureUnit(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, crossBarTexHandle);
+
+  program = pipelineProgram->GetProgramHandle();
+  first = 0;
+  numberOfVertices = (trackpos.size()/3);
+  glBindVertexArray(crossBarVAO);
+  glBindBuffer(GL_ARRAY_BUFFER, crossBarBuffer);
+  GLuint loc3 = glGetAttribLocation(program, "position");
+  glEnableVertexAttribArray(loc3);
+  const void * offset3 = (const void*) 0;
+  glVertexAttribPointer(loc3, 3, GL_FLOAT, GL_FALSE, 0, offset3);
+
+  GLuint loc4 = glGetAttribLocation(program, "texCoord");
+  glEnableVertexAttribArray(loc4);
+  const void * offset4 = (const void*) (size_t)(crossBarPos.size()*sizeof(float));
+  glVertexAttribPointer(loc4, 2, GL_FLOAT, GL_FALSE, 0, offset4);
+  glBindVertexArray(0);
+
+  glBindVertexArray(crossBarVAO);
+   first = 0;
+   numberOfVertices = (crossBarPos.size()/3);
+  pipelineProgram->Bind();
+  glDrawArrays(GL_TRIANGLES, first, numberOfVertices);
+  glBindVertexArray(0);
+
+}
+
+void display()
+{
+  glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+  setCameraAttributes(uindex);
+  uindex++;
+  u += step;
+  if (u>1)
+  {
+    u = 0;
+    controlPoint++;
+    if (controlPoint>splines[splineNum].numControlPoints-3)
+    {
+      controlPoint = 0;
+      splineNum++;
+      if (splineNum>=numSplines)
+      {
+        exit(0);
+      }
+    }
+  }
+  //basic pipeline
+    GLuint program = basicPipelineProgram->GetProgramHandle();
+  //projection matrix
+  GLint h_projectionMatrix = glGetUniformLocation(program, "projectionMatrix");
+  matrix->SetMatrixMode(OpenGLMatrix::Projection);
+  matrix->LoadIdentity();
+  matrix->Perspective(FOV, (1.0*windowWidth/windowHeight), 0.01, 1000.0);
+  float p[16];
+  matrix->GetMatrix(p);
+  basicPipelineProgram->Bind();
+  glUniformMatrix4fv(h_projectionMatrix, 1, GL_FALSE, p);
+
+  //modelview matrix
+  GLint h_modelViewMatrix = glGetUniformLocation(program, "modelViewMatrix");
+  matrix->SetMatrixMode(OpenGLMatrix::ModelView);
+  matrix->LoadIdentity();
+  matrix->LookAt(eye[0], eye[1], eye[2], focus[0], focus[1], focus[2], up[0], up[1], up[2]); // eye, focus, up
+  float view[16]; 
+  matrix->GetMatrix(view); // read the view matrix
+// get a handle to the viewLightDirection shader variable
+  GLint h_viewLightDirection =
+  glGetUniformLocation(program, "lightDirection"); 
+  float light[] = {0,1,0};
+// upload viewLightDirection to the GPU
+  glUniform3fv(h_viewLightDirection, 1, light);
+  glUniformMatrix4fv(glGetUniformLocation(program, "viewMatrix"), 1, GL_FALSE, view);
+
+  //upload variable
+  glUniform4fv( glGetUniformLocation(program, "La"),1, lightAmbient);
+  glUniform4fv( glGetUniformLocation(program, "Ld"),1, lightDiffuse);
+  glUniform4fv( glGetUniformLocation(program, "Ls"),1, lightSpecular);
+  glUniform4fv( glGetUniformLocation(program, "ka"),1, meshAmbient);
+  glUniform4fv( glGetUniformLocation(program, "kd"),1, meshDiffuse);
+  glUniform4fv( glGetUniformLocation(program, "ks"),1, meshSpecular);
+  glUniform1f(glGetUniformLocation(program, "alpha") , shininess);
+
+  matrix->Translate(landTranslate[0],landTranslate[1],landTranslate[2]);
+  matrix->Rotate(landRotate[0],1,0,0);
+  matrix->Rotate(landRotate[1],0,1,0);
+  matrix->Rotate(landRotate[2],0,0,1);
+  matrix->Scale(landScale[0],landScale[1],landScale[2]);
+
+  float m[16];
+  matrix->GetMatrix(m);
+  glUniformMatrix4fv(h_modelViewMatrix, 1, GL_FALSE, m);
+
+  GLint h_normalMatrix =
+  glGetUniformLocation(program, "normalMatrix");
+  float n[16];
+  matrix->SetMatrixMode(OpenGLMatrix::ModelView);
+  matrix->GetNormalMatrix(n); // get normal matrix
+  // upload n to the GPU
+  GLboolean isRowMajor = GL_FALSE;
+  glUniformMatrix4fv(h_normalMatrix, 1, isRowMajor, n);
+
+  //tex pipeline
+  program = pipelineProgram->GetProgramHandle();
+  //projection matrix
+  h_projectionMatrix = glGetUniformLocation(program, "projectionMatrix");
+  matrix->SetMatrixMode(OpenGLMatrix::Projection);
+  matrix->LoadIdentity();
+  matrix->Perspective(FOV, (1.0*windowWidth/windowHeight), 0.01, 1000.0);
+  matrix->GetMatrix(p);
+  pipelineProgram->Bind();
+  glUniformMatrix4fv(h_projectionMatrix, 1, GL_FALSE, p);
+
+  //modelview matrix
+  h_modelViewMatrix = glGetUniformLocation(program, "modelViewMatrix");
+  matrix->SetMatrixMode(OpenGLMatrix::ModelView);
+  matrix->LoadIdentity();
+  matrix->LookAt(eye[0], eye[1], eye[2], focus[0], focus[1], focus[2], up[0], up[1], up[2]); // eye, focus, up
+  //matrix->LookAt(0, 0, 1, 0, 0, 0, 0, 1, 0);
+  matrix->Translate(landTranslate[0],landTranslate[1],landTranslate[2]);
+  matrix->Rotate(landRotate[0],1,0,0);
+  matrix->Rotate(landRotate[1],0,1,0);
+  matrix->Rotate(landRotate[2],0,0,1);
+  matrix->Scale(landScale[0],landScale[1],landScale[2]);
+
+  matrix->GetMatrix(m);
+  pipelineProgram->Bind();
+  glUniformMatrix4fv(h_modelViewMatrix, 1, GL_FALSE, m);
+
+  displayGround();
+  displaySky();
+  displayTrack();
+
+  glutSwapBuffers();
 }
 
 int initTexture(const char * imageFilename, GLuint textureHandle)
@@ -158,14 +1088,14 @@ int initTexture(const char * imageFilename, GLuint textureHandle)
   ImageIO::fileFormatType imgFormat;
   ImageIO::errorType err = img.load(imageFilename, &imgFormat);
 
-  if (err != ImageIO::OK) 
+  if (err != ImageIO::OK)
   {
     printf("Loading texture from %s failed.\n", imageFilename);
     return -1;
   }
 
   // check that the number of bytes is a multiple of 4
-  if (img.getWidth() * img.getBytesPerPixel() % 4) 
+  if (img.getWidth() * img.getBytesPerPixel() % 4)
   {
     printf("Error (%s): The width*numChannels in the loaded image must be a multiple of 4.\n", imageFilename);
     return -1;
@@ -179,7 +1109,7 @@ int initTexture(const char * imageFilename, GLuint textureHandle)
   // fill the pixelsRGBA array with the image pixels
   memset(pixelsRGBA, 0, 4 * width * height); // set all bytes to 0
   for (int h = 0; h < height; h++)
-    for (int w = 0; w < width; w++) 
+    for (int w = 0; w < width; w++)
     {
       // assign some default byte values (for the case where img.getBytesPerPixel() < 4)
       pixelsRGBA[4 * (h * width + w) + 0] = 0; // red
@@ -216,225 +1146,167 @@ int initTexture(const char * imageFilename, GLuint textureHandle)
 
   // query for any errors
   GLenum errCode = glGetError();
-  if (errCode != 0) 
+  if (errCode != 0)
   {
     printf("Texture initialization error. Error code: %d.\n", errCode);
     return -1;
   }
-  
+
   // de-allocate the pixel array -- it is no longer needed
   delete [] pixelsRGBA;
 
   return 0;
 }
 
-// write a screenshot to the specified filename
-void saveScreenshot(const char * filename)
+void initScene(int argc, char *argv[])
 {
-int scale = 2;
-  int ww = windowWidth * scale;
-  int hh = windowHeight * scale;
-  unsigned char * screenshotData = new unsigned char[ww * hh * 3];
-  glReadPixels(0, 0, ww, hh, GL_RGB, GL_UNSIGNED_BYTE, screenshotData);
+  glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+  glEnable (GL_DEPTH_TEST);
 
-  unsigned char * screenshotData1 = new unsigned char[windowWidth * windowHeight * 3];
-  for (int h = 0; h < windowHeight; h++) {
-    for (int w = 0; w < windowWidth; w++) {
-      int h1 = h * scale;
-      int w1 = w * scale;
-      screenshotData1[(h * windowWidth + w) * 3] = screenshotData[(h1 * ww + w1) * 3];
-      screenshotData1[(h * windowWidth + w) * 3 + 1] = screenshotData[(h1 * ww + w1) * 3 + 1];
-      screenshotData1[(h * windowWidth + w) * 3 + 2] = screenshotData[(h1 * ww + w1) * 3 + 2];
-    }
-  }
-
-  ImageIO screenshotImg(windowWidth, windowHeight, 3, screenshotData1);
-
-  if (screenshotImg.save(filename, ImageIO::FORMAT_JPEG) == ImageIO::OK)
-    cout << "File " << filename << " saved successfully." << endl;
-  else cout << "Failed to save file " << filename << '.' << endl;
-
-  delete [] screenshotData;
-  delete [] screenshotData1;
-}
-void computeCrossProduct(Point a, Point b, Point &c)
-{
-  c.x = a.y*b.z - b.y*a.z;
-  c.y = a.z*b.x - b.z*a.x;
-  c.z = a.x*b.y - b.x*a.y;
-}
-void normalize(Point &v)
-{
-    double mag = sqrt(pow(v.x,2) + pow(v.y,2) + pow(v.z,2));
-    if (mag>=0)
-    {
-      v.x = v.x / mag;
-      v.y = v.y / mag;
-      v.z = v.z / mag;
-    }
-    else
-    {
-      v.x = 0;
-      v.y = 0;
-      v.z = 0;
-    }
-}
-// computes the normal and binormal given the tangent at a point
-void computeNormal(Point tangent, Point &normal, Point &binormal)
-{
-  //cout<<"tangent" << tangent.x << " " << tangent.y << " "<< tangent.z <<"\n";
-  computeCrossProduct(binormal, tangent, normal);
-    //cout<<"noraml" << normal.x << normal.y << normal.z <<"\n";
-  normalize(normal);
-  computeCrossProduct(tangent, normal, binormal);
-  normalize(binormal);
-}
-void setCameraAttributes(int i)
-{
-  computeNormal(tangentCoord[i], normal, binormal);
-
-  eye[0] = splineCoord[i].x + 0.05 * normal.x;
-  eye[1] = splineCoord[i].y + 0.05 * normal.y;
-  eye[2] = splineCoord[i].z + 0.05 * normal.z;
-
-  lookat[0] = splineCoord[i+1].x + 0.05 * normal.x;
-  lookat[1] = splineCoord[i+1].y + 0.05 * normal.y;
-  lookat[2] = splineCoord[i+1].z + 0.05 * normal.z;
-
-  up[0] = normal.x;
-  up[1] = normal.y;
-  up[2] = normal.z;
-}
-void displayFunc()
-{
-  // render some stuff...
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-  setCameraAttributes(uindex);
-  uindex++;
-  u += 0.05;
-  if (u>1)
+  glGenTextures(1, &skyTexHandle);
+  int code = initTexture("sky.jpg", skyTexHandle);
+  if (code != 0)
   {
-    u = 0;
-    controlPoint++;
-    if (controlPoint>splines[splineNum].numControlPoints-3)
-    {
-      controlPoint = 0;
-      splineNum++;
-      if (splineNum>=numSplines)
-      {
-        printf("return here");
-        return;
-      }
-    }
+    printf("Error loading the sky texture image.\n");
+    exit(EXIT_FAILURE);
   }
-  matrix.SetMatrixMode(OpenGLMatrix::ModelView);
-  matrix.LoadIdentity();
-  matrix.LookAt(eye[0], eye[1], eye[2], lookat[0], lookat[1], lookat[2], up[0], up[1], up[2]);
-  matrix.Translate(landTranslate[0], landTranslate[1],landTranslate[2]);
-  matrix.Rotate(landRotate[0], 1, 0, 0);
-  matrix.Rotate(landRotate[1], 0, 1, 0);
-  matrix.Rotate(landRotate[2], 0, 0, 1);
-  matrix.Scale(landScale[0], landScale[1],landScale[2]);
-  float m[16];
-  matrix.GetMatrix(m);
 
-  float p[16];
-  matrix.SetMatrixMode(OpenGLMatrix::Projection);
-  matrix.GetMatrix(p);
-  //
-  // bind shader
-  pipelineProgram->Bind();
+  glGenTextures(1, &groundTexHandle);
+  code = initTexture("ground.jpg", groundTexHandle);
+  if (code != 0)
+  {
+    printf("Error loading the ground texture image.\n");
+    exit(EXIT_FAILURE);
+  }
+  /*
+  glGenTextures(1, &trackTexHandle);
+  code = initTexture("track.jpg", trackTexHandle);
+  if (code != 0)
+  {
+    printf("Error loading the ground texture image.\n");
+    exit(EXIT_FAILURE);
+  }
+*/
+  glGenTextures(1, &crossBarTexHandle);
+  code = initTexture("crossBar.jpg", crossBarTexHandle);
+  if (code != 0)
+  {
+    printf("Error loading the ground texture image.\n");
+    exit(EXIT_FAILURE);
+  }
 
-  // set variable
-  pipelineProgram->SetModelViewMatrix(m);
-  pipelineProgram->SetProjectionMatrix(p);
-  
-  //get mode varible
-  GLint loc = glGetUniformLocation(pipelineProgram->GetProgramHandle(), "mode");
-  glUniform1f(loc,false);
-  glBindVertexArray(pointVertexArray);
-  glDrawArrays(GL_LINES, 0, sizePoint);
-  
-  glutSwapBuffers(); 
-}
+  pipelineProgram = new TexPipelineProgram();
+  pipelineProgram->Init("../openGLHelper-starterCode");
+  basicPipelineProgram = new BasicPipelineProgram();
+  basicPipelineProgram->Init("../openGLHelper-starterCode");
+  matrix = new OpenGLMatrix();
+  initBuffer();
+  initVBOs();
 
-void displayTrack()
-{
-  glGenVertexArrays(1, &VAO);
+  Point v;
+  v.x = 0.0000000001;
+  v.y = -1;
+  v.z = 0.0000000001;
 
-  setTextureUnit(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, trackTexHandle);
+  tangent.x = tangentCoord[0].x;
+  tangent.y = tangentCoord[0].y;
+  tangent.z = tangentCoord[0].z;
 
-  GLuint program = pipelineProgram->GetProgramHandle();
-  glBindVertexArray(VAO);
-  glBindBuffer(GL_ARRAY_BUFFER, buffer);
-  GLuint loc = glGetAttribLocation(program, "position");
-  glEnableVertexAttribArray(loc);
-  const void * offset = (const void*) 0;
-  glVertexAttribPointer(loc, 3, GL_FLOAT, GL_FALSE, 0, offset);
+  computeCrossProduct(tangent,v,normal);
+  normalize(normal);
+  computeCrossProduct(tangent,normal,binormal);
+  normalize(binormal);
 
-  GLuint loc2 = glGetAttribLocation(program, "texCoord");
-  glEnableVertexAttribArray(loc2);
-  const void * offset2 = (const void*) (size_t)(pos.size()*sizeof(float));
-  glVertexAttribPointer(loc2, 2, GL_FLOAT, GL_FALSE, 0, offset2);
-  glBindVertexArray(0);
-
-  glBindVertexArray(VAO);
-  GLint first = 0;
-  GLsizei numberOfVertices = (pos.size()/3);
-  glDrawArrays(GL_TRIANGLES, first, numberOfVertices);
-  glBindVertexArray(0);
-
-  glGenVertexArrays(1, &crossBarVAO);
-  setTextureUnit(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, crossBarTexHandle);
-
-   program = pipelineProgram->GetProgramHandle();
-  glBindVertexArray(crossBarVAO);
-  glBindBuffer(GL_ARRAY_BUFFER, crossBarBuffer);
-  GLuint loc3 = glGetAttribLocation(program, "position");
-  glEnableVertexAttribArray(loc3);
-  const void * offset3 = (const void*) 0;
-  glVertexAttribPointer(loc3, 3, GL_FLOAT, GL_FALSE, 0, offset3);
-
-  GLuint loc4 = glGetAttribLocation(program, "texCoord");
-  glEnableVertexAttribArray(loc4);
-  const void * offset4 = (const void*) (size_t)(crossBarPos.size()*sizeof(float));
-  glVertexAttribPointer(loc4, 2, GL_FLOAT, GL_FALSE, 0, offset4);
-  glBindVertexArray(0);
-
-  glBindVertexArray(crossBarVAO);
-   first = 0;
-   numberOfVertices = (crossBarPos.size()/3);
-  glDrawArrays(GL_TRIANGLES, first, numberOfVertices);
-  glBindVertexArray(0);
 }
 
 void idleFunc()
 {
-  // do some stuff... 
-
-  // save screen shot as a rate of 15fps
-  time_count++;
-  if(time_count > fps/4){
-    time_count = 0;
-    char text[70];
-    sprintf(text,"%.3d", screenshot_index);
-    screenshot_index++;
-    //saveScreenshot(text);
-  }
-  // make the screen update 
+  // for example, here, you can save the screenshots to disk (to make the animation)
   glutPostRedisplay();
 }
 
 void reshapeFunc(int w, int h)
 {
+  // setup perspective matrix...
+  GLfloat aspect = (GLfloat) w / (GLfloat) h;
   glViewport(0, 0, w, h);
+  matrix->SetMatrixMode(OpenGLMatrix::Projection);
+  matrix->LoadIdentity();
+  matrix->Perspective(FOV, aspect, 0.01, 1000.0);
+  matrix->SetMatrixMode(OpenGLMatrix::ModelView);
+}
 
-  matrix.SetMatrixMode(OpenGLMatrix::Projection);
-  matrix.LoadIdentity();
-  matrix.Perspective(54.0f, (float)w / (float)h, 0.01f, 1000.0f);
+void screenshotTimer(int value)
+{
+  switch(value){
+    case 0:
+      if(!takeSS) break;
+      char fileName[40];
+      sprintf(fileName, "animation/%03d.jpg", ssCount);
+      saveScreenshot(fileName);
+      ssCount++;
+      if(ssCount == 1000)
+        takeSS = false;
+      break;
+    default:
+      break;
+  }
+  glutTimerFunc(timer, screenshotTimer, 0);
+}
+
+int loadSplines(char * argv)
+{
+  char * cName = (char *) malloc(128 * sizeof(char));
+  FILE * fileList;
+  FILE * fileSpline;
+  int iType, i = 0, j, iLength;
+
+  // load the track file
+  fileList = fopen(argv, "r");
+  if (fileList == NULL)
+  {
+    printf ("can't open file\n");
+    exit(1);
+  }
+
+  // stores the number of splines in a global variable
+  fscanf(fileList, "%d", &numSplines);
+
+  splines = (Spline*) malloc(numSplines * sizeof(Spline));
+
+  // reads through the spline files
+  for (j = 0; j < numSplines; j++)
+  {
+    i = 0;
+    fscanf(fileList, "%s", cName);
+    fileSpline = fopen(cName, "r");
+
+    if (fileSpline == NULL)
+    {
+      printf ("can't open file\n");
+      exit(1);
+    }
+
+    // gets length for spline file
+    fscanf(fileSpline, "%d %d", &iLength, &iType);
+
+    // allocate memory for all the points
+    splines[j].points = (Point *)malloc(iLength * sizeof(Point));
+    splines[j].numControlPoints = iLength;
+
+    // saves the data to the struct
+    while (fscanf(fileSpline, "%lf %lf %lf",
+	   &splines[j].points[i].x,
+	   &splines[j].points[i].y,
+	   &splines[j].points[i].z) != EOF)
+    {
+      i++;
+    }
+  }
+
+  free(cName);
+
+  return 0;
 }
 
 void mouseMotionDragFunc(int x, int y)
@@ -524,18 +1396,17 @@ void mouseButtonFunc(int button, int state, int x, int y)
       rightMouseButton = (state == GLUT_DOWN);
     break;
   }
-
-  // keep track of whether CTRL and SHIFT keys are pressed
-  switch (glutGetModifiers())
-  {
-
-    case GLUT_ACTIVE_SHIFT:
-      controlState = SCALE;
-    break;
-    default:
-      controlState = ROTATE;
-    break;
-  }
+  // switch (glutGetModifiers())
+  // {
+  //   case GLUT_ACTIVE_SHIFT:
+  //     controlState = TRANSLATE;
+  //   break;
+  //
+  //   // if CTRL and SHIFT are not pressed, we are in rotate mode
+  //   // default:
+  //   //   controlState = ROTATE;
+  //   // break;
+  // }
 
   // store the new mouse position
   mousePos[0] = x;
@@ -549,158 +1420,46 @@ void keyboardFunc(unsigned char key, int x, int y)
     case 27: // ESC key
       exit(0); // exit the program
     break;
+
     case ' ':
       cout << "You pressed the spacebar." << endl;
     break;
-    case 't':
-      controlState = TRANSLATE;
-    break;
+
     case 'x':
       // take a screenshot
       saveScreenshot("screenshot.jpg");
     break;
-    case '1':
-     displayMode = ONE;
+
+    case 't':
+      controlState = TRANSLATE;
+      // store the new mouse position
+      mousePos[0] = x;
+      mousePos[1] = y;
     break;
-    case '2':
-     displayMode = TWO;
+
+    case 's':
+      controlState = SCALE;
+      // store the new mouse position
+      mousePos[0] = x;
+      mousePos[1] = y;
     break;
-    case '3':
-     displayMode = THREE;
-     break;
-    case '4':
-     displayMode = FOUR;
-     break;
+
+    case 'r':
+      controlState = ROTATE;
+      // store the new mouse position
+      mousePos[0] = x;
+      mousePos[1] = y;
+    break;
+
   }
-}
-Point TangentInterpolation(float u, Point p1, Point p2,Point p3,Point p4){
-  float s = 0.5f;
-  float uu = u*u;
-  float q1 = -s*3.0f*uu + 2.0f*s*2.0f*u - s;
-  float q2 = (2.0f-s)*3.0f*uu + (s-3)*2.0f*u;
-  float q3 = (s-2)*3.0f*uu + (3-2*s)*2.0f*u  + s;
-  float q4 = s*3.0f*uu - s*2.0f*u;
-  Point newPoint;
-  newPoint.x = p1.x*q1 +  p2.x*q2 + p3.x * q3 + p4.x * q4;
-  newPoint.y = p1.y*q1 +  p2.y*q2 + p3.y * q3 + p4.y * q4;
-  newPoint.z = p1.z*q1 +  p2.z*q2 + p3.z * q3 + p4.z * q4;
-  return newPoint;
-}
-//functions that calculate the desired point given
-Point PointInterpolation(float u, Point p1, Point p2,Point p3,Point p4){
-  float s = 0.5f;
-  float uu = u*u;
-  float uuu = uu*u;
-  float q1 = -s*uuu + 2.0f*s*uu - s*u;
-  float q2 = (2.0f-s)*uuu + (s-3)*uu  + 1.0f;
-  float q3 = (s-2)*uuu + (3-2*s)*uu  + s*u;
-  float q4 = s*uuu - s*uu;
-
-  Point newPoint;
-  newPoint.x = p1.x*q1 +  p2.x*q2 + p3.x * q3 + p4.x * q4;
-  newPoint.y = p1.y*q1 +  p2.y*q2 + p3.y * q3 + p4.y * q4;
-  newPoint.z = p1.z*q1 +  p2.z*q2 + p3.z * q3 + p4.z * q4;
-  return newPoint;
-}
-void initScene(int argc, char *argv[])
-{
-  // load the image from a jpeg disk file to main memory
-
-  glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-  std::vector<float> pos;
-  std::vector<float> color;
-  //initialize buffer
-  for(int i = 0; i < splines[0].numControlPoints-3;i++ ){
-    //print each point;
-    Point p1 = splines[0].points[i];
-    Point p2 = splines[0].points[i+1];
-    Point p3 = splines[0].points[i+2];
-    Point p4 = splines[0].points[i+3];
-    for(float u = 0.0f; u <= 1.0f; u+= 0.01f){
-      Point newP = PointInterpolation(u,p1, p2, p3, p4);
-      Point newTan =  TangentInterpolation(u, p1, p2, p3, p4);
-      splineCoord.push_back(newP);
-      normalize(newTan);
-      tangentCoord.push_back(newTan);
-      pos.push_back(newP.x);
-      pos.push_back(newP.y);
-      pos.push_back(newP.z);
-      //push the same point twice to ensure the line draws correctly
-      if(i==0 && u==0.0f){
-        continue;
-      }
-      if(i==splines[0].numControlPoints-4 && u == 1.0f){
-        continue;
-      }
-      pos.push_back(newP.x);
-      pos.push_back(newP.y);
-      pos.push_back(newP.z);
-    }
-  }
-  for(int j = 0; j < pos.size()/3 -1; j++){
-    color.push_back(0);
-    color.push_back(1);
-    color.push_back(0);
-    color.push_back(1);
-  }
-  binormal.x = 0.00000000000001;
-  binormal.y = 1;
-  binormal.z = 0.00000000000001;
-  //binormal.x = 0.1 - splineCoord[0].x;
-  //binormal.y = -1 - splineCoord[0].y;
-  //binormal.z = -0.1 - splineCoord[0].z;
-  glGenBuffers(1, &Buffer);
-  glBindBuffer(GL_ARRAY_BUFFER, Buffer);
-  glBufferData(GL_ARRAY_BUFFER, (pos.size() + color.size()) * sizeof(float),
-  NULL, GL_STATIC_DRAW); // init buffer’s size, but don’t assign any data
-  // upload position data
-  glBufferSubData(GL_ARRAY_BUFFER, 0,
-  pos.size() * sizeof(float), pos.data());
-  // upload color data
-  glBufferSubData(GL_ARRAY_BUFFER, pos.size() * sizeof(float),
-  color.size() * sizeof(float), color.data()); 
-  pipelineProgram = new BasicPipelineProgram;
-  int ret = pipelineProgram->Init(shaderBasePath);
-  if (ret != 0) abort();
-
-  //point vao
-  glGenVertexArrays(1, &pointVertexArray);
-  glBindVertexArray(pointVertexArray);
-  glBindBuffer(GL_ARRAY_BUFFER, Buffer);
-
-  GLuint loc =
-  glGetAttribLocation(pipelineProgram->GetProgramHandle(), "position");
-  glEnableVertexAttribArray(loc);
-  glVertexAttribPointer(loc, 3, GL_FLOAT, GL_FALSE, 0, (const void *)0);
-
-  loc = glGetAttribLocation(pipelineProgram->GetProgramHandle(), "color");
-  glEnableVertexAttribArray(loc);
-  glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE, 0, (const void *)(sizeof(float)*pos.size()));
-  glEnable(GL_DEPTH_TEST); 
-  sizePoint = color.size();
-  std::cout << "GL error: " << glGetError() << std::endl;
 }
 
 int main(int argc, char *argv[])
 {
-  if (argc<2)
-  {  
-    printf ("usage: %s <trackfile>\n", argv[0]);
-    exit(0);
-  }
-
-  // load the splines from the provided filename
-  loadSplines(argv[1]);
-
-  printf("Loaded %d spline(s).\n", numSplines);
-  for(int i=0; i<numSplines; i++)
-    printf("Num control points in spline %d: %d.\n", i, splines[i].numControlPoints);
-
   cout << "Initializing GLUT..." << endl;
   glutInit(&argc,argv);
 
   cout << "Initializing OpenGL..." << endl;
-
   #ifdef __APPLE__
     glutInitDisplayMode(GLUT_3_2_CORE_PROFILE | GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH | GLUT_STENCIL);
   #else
@@ -708,20 +1467,15 @@ int main(int argc, char *argv[])
   #endif
 
   glutInitWindowSize(windowWidth, windowHeight);
-  glutInitWindowPosition(0, 0);  
+  glutInitWindowPosition(0, 0);
   glutCreateWindow(windowTitle);
 
   cout << "OpenGL Version: " << glGetString(GL_VERSION) << endl;
   cout << "OpenGL Renderer: " << glGetString(GL_RENDERER) << endl;
   cout << "Shading Language Version: " << glGetString(GL_SHADING_LANGUAGE_VERSION) << endl;
 
-  #ifdef __APPLE__
-    // This is needed on recent Mac OS X versions to correctly display the window.
-    glutReshapeWindow(windowWidth - 1, windowHeight - 1);
-  #endif
-
-  // tells glut to use a particular display function to redraw 
-  glutDisplayFunc(displayFunc);
+  // tells glut to use a particular display function to redraw
+  glutDisplayFunc(display);
   // perform animation inside idleFunc
   glutIdleFunc(idleFunc);
   // callback for mouse drags
@@ -734,10 +1488,13 @@ int main(int argc, char *argv[])
   glutReshapeFunc(reshapeFunc);
   // callback for pressing the keys on the keyboard
   glutKeyboardFunc(keyboardFunc);
+  // callback for a timer to save screenshots
+  glutTimerFunc(timer, screenshotTimer, 0);
 
   // init glew
   #ifdef __APPLE__
     // nothing is needed on Apple
+    glutReshapeWindow(windowWidth - 1, windowHeight - 1);
   #else
     // Windows, Linux
     GLint result = glewInit();
@@ -748,11 +1505,22 @@ int main(int argc, char *argv[])
     }
   #endif
 
+  if (argc<2)
+  {
+    printf ("usage: %s <trackfile>\n", argv[0]);
+    exit(0);
+  }
+
+  // load the splines from the provided filename
+  loadSplines(argv[1]);
+
+  printf("Loaded %d spline(s).\n", numSplines);
+  for(int i=0; i<numSplines; i++)
+    printf("Num control points in spline %d: %d.\n", i, splines[i].numControlPoints);
+
   // do initialization
   initScene(argc, argv);
 
   // sink forever into the glut loop
   glutMainLoop();
 }
-
-
